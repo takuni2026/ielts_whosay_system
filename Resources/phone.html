@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
+  <title>IELTS Speaking Practice</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172033; background: #f4f6fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+    main { max-width: 680px; margin: auto; }
+    h1 { font-size: 1.35rem; margin: 6px 0 4px; }
+    .sub, .hint { color: #68738a; font-size: .88rem; line-height: 1.5; }
+    .status { margin: 16px 0; padding: 12px 14px; border-radius: 12px; background: white; box-shadow: 0 2px 10px #1e31500c; font-size: .9rem; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 20px; }
+    button { border: 0; border-radius: 12px; padding: 14px 12px; font-size: 1rem; font-weight: 650; color: white; background: #3559cb; cursor: pointer; }
+    button.secondary { background: #e5eaf5; color: #24314e; }
+    button:disabled { opacity: .5; cursor: default; }
+    #choose-region { width: 100%; margin: -8px 0 12px; }
+    .region-box { margin: 12px 0 20px; padding: 12px; border-radius: 12px; background: white; border: 1px solid #dce2ef; }
+    .canvas-wrap { width: 100%; margin: 10px auto; text-align: center; }
+    #region-canvas { display: block; width: 100%; height: auto; max-height: 55vh; object-fit: contain; touch-action: none; cursor: crosshair; }
+    .region-actions { display: flex; gap: 10px; }
+    .region-actions button { flex: 1; }
+    label { display: block; margin: 16px 0 7px; font-size: .92rem; font-weight: 700; }
+    textarea, pre { width: 100%; margin: 0; border: 1px solid #dce2ef; border-radius: 12px; background: white; padding: 13px; color: #172033; font: 16px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; }
+    select { width: 100%; margin: 12px 0 2px; padding: 12px; border: 1px solid #dce2ef; border-radius: 12px; background: white; color: #172033; font-size: 1rem; }
+    textarea { min-height: 116px; resize: vertical; }
+    pre { min-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .error { color: #ad3024; margin-top: 10px; white-space: pre-wrap; font-size: .9rem; }
+    .wordcount { float: right; color: #68738a; font-weight: 400; }
+    footer { margin-top: 18px; color: #7d8798; font-size: .78rem; text-align: center; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>IELTS Speaking Practice</h1>
+  <div class="sub">Macと同じWi-Fiで接続中</div>
+  <div id="status" class="status">接続しています…</div>
+  <select id="response-mode" aria-label="回答モード">
+    <option value="ieltsEnglish">IELTS英語（C1回答例）</option>
+    <option value="japaneseQuiz">日本語クイズ（選択肢と解説）</option>
+  </select>
+  <div class="actions">
+    <button id="scan" class="secondary">次の質問を読む</button>
+  <button id="generate">OK・回答を生成</button>
+  </div>
+  <button id="choose-region" class="secondary">質問の表示範囲を選ぶ</button>
+  <div id="region-box" class="region-box" hidden>
+    <strong>質問が表示される部分を指で囲んでください</strong>
+    <div class="hint">前回の範囲があれば枠を表示します。選び直して保存できます。</div>
+    <div class="canvas-wrap"><canvas id="region-canvas"></canvas></div>
+    <div class="region-actions">
+      <button id="cancel-region" class="secondary">キャンセル</button>
+      <button id="save-region">この範囲を保存</button>
+    </div>
+  </div>
+  <label for="question">読み取った質問（修正できます）</label>
+  <textarea id="question" placeholder="Macで読み取ると、ここに質問が表示されます"></textarea>
+  <div class="hint">質問を確認してからOKを押してください。Macの画面撮影はボタンを押した時だけ行われます。</div>
+  <label for="answer"><span id="answer-heading">C1レベルの回答例</span> <span id="words" class="wordcount"></span></label>
+  <pre id="answer">回答はここに順次表示されます。</pre>
+  <div id="error" class="error"></div>
+  <footer>ローカルネットワーク経由でMac上のアプリを操作します。</footer>
+</main>
+<script>
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const statusEl = document.getElementById('status');
+  const questionEl = document.getElementById('question');
+  const answerEl = document.getElementById('answer');
+  const errorEl = document.getElementById('error');
+  const scanButton = document.getElementById('scan');
+  const generateButton = document.getElementById('generate');
+  const modeSelect = document.getElementById('response-mode');
+  const regionButton = document.getElementById('choose-region');
+  const regionBox = document.getElementById('region-box');
+  const canvas = document.getElementById('region-canvas');
+  const context = canvas.getContext('2d');
+  let busy = false;
+  let lastQuestion = '';
+  let lastAnswer = '';
+  let regionPreviewVisible = false;
+  let regionPreviewLoading = false;
+  let screenshot = null;
+  let selection = null;
+  let dragStart = null;
+  let dragCurrent = null;
+
+  async function api(path, method = 'GET', body) {
+    const response = await fetch(path, {
+      method,
+      headers: { 'X-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(`Macからの応答: ${response.status}`);
+    return response.json();
+  }
+
+  async function refresh() {
+    try {
+      const state = await api('/api/state');
+      statusEl.textContent = state.status || '接続中';
+      busy = !!state.busy;
+      if (document.activeElement !== modeSelect && state.responseMode) modeSelect.value = state.responseMode;
+      const japaneseQuiz = state.responseMode === 'japaneseQuiz';
+      document.getElementById('answer-heading').textContent = japaneseQuiz ? '答えと解説' : 'C1レベルの回答例';
+      generateButton.textContent = japaneseQuiz ? 'OK・答えと解説' : 'OK・回答を生成';
+      scanButton.disabled = busy;
+      regionButton.disabled = busy;
+      generateButton.disabled = busy || !questionEl.value.trim();
+      if (document.activeElement !== questionEl && state.question !== lastQuestion) {
+        questionEl.value = state.question || '';
+        lastQuestion = questionEl.value;
+      }
+      if (state.answer !== lastAnswer) {
+        answerEl.textContent = state.answer || '回答はここに順次表示されます。';
+        lastAnswer = state.answer || '';
+      }
+      document.getElementById('words').textContent = state.answerMetric || '';
+      errorEl.textContent = state.error || '';
+      regionButton.textContent = state.region ? '質問の表示範囲を変更（前回の範囲を記憶中）' : '質問の表示範囲を選ぶ';
+      if (state.hasRegionPreview && !regionPreviewVisible && !regionPreviewLoading) loadRegionPreview(state.region);
+      if (!state.hasRegionPreview && regionPreviewVisible) closeRegionPicker();
+    } catch (error) {
+      statusEl.textContent = 'Macに接続できません。Mac側のアプリと同じWi-Fiを確認してください。';
+      errorEl.textContent = error.message;
+    }
+  }
+
+  scanButton.addEventListener('click', async () => {
+    scanButton.disabled = true;
+    try { await api('/api/scan', 'POST', {}); }
+    catch (error) { errorEl.textContent = error.message; }
+    setTimeout(refresh, 300);
+  });
+
+  async function loadRegionPreview(savedRegion) {
+    regionPreviewLoading = true;
+    try {
+      const response = await fetch('/api/region-preview', { headers: { 'X-Token': token }, cache: 'no-store' });
+      if (!response.ok) { regionPreviewLoading = false; return; }
+      const image = new Image();
+      image.onload = () => {
+        screenshot = image;
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        selection = Array.isArray(savedRegion) ? savedRegion : null;
+        regionPreviewVisible = true;
+        regionPreviewLoading = false;
+        regionBox.hidden = false;
+        drawRegionCanvas();
+        regionBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
+      image.onerror = () => { regionPreviewLoading = false; };
+      image.src = URL.createObjectURL(await response.blob());
+    } catch (error) { regionPreviewLoading = false; errorEl.textContent = error.message; }
+  }
+
+  function closeRegionPicker() {
+    regionPreviewVisible = false;
+    regionBox.hidden = true;
+    screenshot = null;
+    selection = null;
+    dragStart = null;
+    dragCurrent = null;
+  }
+
+  function drawRegionCanvas() {
+    if (!screenshot) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(screenshot, 0, 0, canvas.width, canvas.height);
+    const rect = dragStart && dragCurrent
+      ? [Math.min(dragStart[0], dragCurrent[0]), Math.min(dragStart[1], dragCurrent[1]), Math.abs(dragCurrent[0] - dragStart[0]), Math.abs(dragCurrent[1] - dragStart[1])]
+      : selection;
+    if (!rect) return;
+    context.fillStyle = 'rgba(53, 89, 203, .16)';
+    context.strokeStyle = '#2454db';
+    context.lineWidth = Math.max(3, canvas.width / 700);
+    context.fillRect(rect[0] * canvas.width, rect[1] * canvas.height, rect[2] * canvas.width, rect[3] * canvas.height);
+    context.strokeRect(rect[0] * canvas.width, rect[1] * canvas.height, rect[2] * canvas.width, rect[3] * canvas.height);
+  }
+
+  function canvasPoint(event) {
+    const bounds = canvas.getBoundingClientRect();
+    return [Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+            Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height))];
+  }
+
+  regionButton.addEventListener('click', async () => {
+    regionButton.disabled = true;
+    try { await api('/api/region-preview', 'POST', {}); }
+    catch (error) { errorEl.textContent = error.message; }
+    setTimeout(refresh, 300);
+  });
+
+  canvas.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    canvas.setPointerCapture(event.pointerId);
+    dragStart = canvasPoint(event);
+    dragCurrent = dragStart;
+    drawRegionCanvas();
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!dragStart) return;
+    event.preventDefault();
+    dragCurrent = canvasPoint(event);
+    drawRegionCanvas();
+  });
+  canvas.addEventListener('pointerup', event => {
+    if (!dragStart) return;
+    dragCurrent = canvasPoint(event);
+    selection = [Math.min(dragStart[0], dragCurrent[0]), Math.min(dragStart[1], dragCurrent[1]), Math.abs(dragCurrent[0] - dragStart[0]), Math.abs(dragCurrent[1] - dragStart[1])];
+    dragStart = null;
+    dragCurrent = null;
+    drawRegionCanvas();
+  });
+  canvas.addEventListener('pointercancel', () => { dragStart = null; dragCurrent = null; drawRegionCanvas(); });
+
+  document.getElementById('save-region').addEventListener('click', async () => {
+    if (!selection || selection[2] < .01 || selection[3] < .01) {
+      errorEl.textContent = '質問文を含む範囲をドラッグして囲んでください。';
+      return;
+    }
+    const [x, y, width, height] = selection;
+    try {
+      await api('/api/region', 'POST', { x, y, width, height });
+      errorEl.textContent = '';
+      closeRegionPicker();
+      setTimeout(refresh, 300);
+    } catch (error) { errorEl.textContent = error.message; }
+  });
+  document.getElementById('cancel-region').addEventListener('click', async () => {
+    closeRegionPicker();
+    try { await api('/api/region-cancel', 'POST', {}); }
+    catch (error) { errorEl.textContent = error.message; }
+  });
+
+  generateButton.addEventListener('click', async () => {
+    if (!questionEl.value.trim()) return;
+    generateButton.disabled = true;
+    try { await api('/api/generate', 'POST', { question: questionEl.value }); }
+    catch (error) { errorEl.textContent = error.message; }
+    setTimeout(refresh, 300);
+  });
+
+  questionEl.addEventListener('input', () => {
+    generateButton.disabled = busy || !questionEl.value.trim();
+  });
+  modeSelect.addEventListener('change', async () => {
+    try { await api('/api/mode', 'POST', { mode: modeSelect.value }); }
+    catch (error) { errorEl.textContent = error.message; }
+    setTimeout(refresh, 300);
+  });
+  refresh();
+  setInterval(refresh, 1300);
+</script>
+</body>
+</html>
